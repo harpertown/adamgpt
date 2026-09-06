@@ -236,7 +236,7 @@ export default function Home() {
 								AdamGPT
 							</h1>
 							<p className="mt-2 text-[15px] leading-relaxed text-[#71717a]">
-								Ask anything. A human answers.
+								Ask anything, you'll get an answer... eventually
 							</p>
 						</div>
 
