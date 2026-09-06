@@ -4,11 +4,23 @@
 	"main": "./workers/app.ts",
 	"compatibility_date": "2025-10-08",
 	"compatibility_flags": ["nodejs_compat"],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "CHAT_QUEUE",
+				"class_name": "ChatQueue"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": ["ChatQueue"]
+		}
+	],
 	"observability": {
 		"enabled": true
 	},
 	"upload_source_maps": true,
-	"vars": {
-		"VALUE_FROM_CLOUDFLARE": "Hello from Cloudflare"
-	}
+	"vars": {}
 }
