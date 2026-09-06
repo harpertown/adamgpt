@@ -11,6 +11,15 @@ export type ChatMessage = {
 	createdAt: number;
 };
 
+export type ClientMeta = {
+	ip: string;
+	userAgent: string;
+	country: string;
+	city: string;
+	region: string;
+	timezone: string;
+};
+
 export type ConversationSummary = {
 	id: string;
 	clientId: string;
@@ -20,6 +29,7 @@ export type ConversationSummary = {
 	updatedAt: number;
 	lastMessage: string;
 	messages: ChatMessage[];
+	clientMeta: ClientMeta;
 };
 
 export type PublicState = {

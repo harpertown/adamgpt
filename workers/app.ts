@@ -15,6 +15,15 @@ type AppEnv = Env & {
 	ADMIN_TOKEN?: string;
 };
 
+type ClientMeta = {
+	ip: string;
+	userAgent: string;
+	country: string;
+	city: string;
+	region: string;
+	timezone: string;
+};
+
 type Sender = "user" | "assistant";
 type ConversationStatus = "queued" | "answered";
 
@@ -37,6 +46,7 @@ type ConversationSummary = {
 	updatedAt: number;
 	lastMessage: string;
 	messages: ChatMessage[];
+	clientMeta: ClientMeta;
 };
 
 type PublicState = {
@@ -86,6 +96,13 @@ export class ChatQueue extends DurableObject<AppEnv> {
 				this.ctx.storage.sql.exec("ALTER TABLE conversations ADD COLUMN display_name TEXT NOT NULL DEFAULT ''");
 			} catch {
 				// column already exists
+			}
+			for (const col of ["ip", "user_agent", "country", "city", "region", "timezone"]) {
+				try {
+					this.ctx.storage.sql.exec(`ALTER TABLE conversations ADD COLUMN ${col} TEXT NOT NULL DEFAULT ''`);
+				} catch {
+					// column already exists
+				}
 			}
 			this.ctx.storage.sql.exec(`
 				CREATE TABLE IF NOT EXISTS images (
@@ -203,7 +220,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 		return row ? { data: row.data, contentType: row.content_type } : null;
 	}
 
-	async submitMessage(clientId: string, text: string, imageId?: string, displayName?: string, fileId?: string): Promise<PublicState> {
+	async submitMessage(clientId: string, text: string, imageId?: string, displayName?: string, fileId?: string, meta?: ClientMeta): Promise<PublicState> {
 		await this.initialized;
 
 		const safeClientId = cleanId(clientId);
@@ -222,6 +239,8 @@ export class ChatQueue extends DurableObject<AppEnv> {
 		const now = Date.now();
 		let conversation = this.findConversationByClient(safeClientId);
 
+		const clientMeta: ClientMeta = meta ?? { ip: "", userAgent: "", country: "", city: "", region: "", timezone: "" };
+
 		if (!conversation) {
 			conversation = {
 				id: crypto.randomUUID(),
@@ -232,17 +251,34 @@ export class ChatQueue extends DurableObject<AppEnv> {
 				updatedAt: now,
 				lastMessage: "",
 				messages: [],
+				clientMeta,
 			};
 			this.ctx.storage.sql.exec(
-				"INSERT INTO conversations (id, client_id, display_name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+				"INSERT INTO conversations (id, client_id, display_name, status, created_at, updated_at, ip, user_agent, country, city, region, timezone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				conversation.id,
 				conversation.clientId,
 				conversation.displayName,
 				conversation.status,
 				conversation.createdAt,
 				conversation.updatedAt,
+				clientMeta.ip,
+				clientMeta.userAgent,
+				clientMeta.country,
+				clientMeta.city,
+				clientMeta.region,
+				clientMeta.timezone,
 			);
 		} else {
+			this.ctx.storage.sql.exec(
+				"UPDATE conversations SET ip = ?, user_agent = ?, country = ?, city = ?, region = ?, timezone = ? WHERE id = ?",
+				clientMeta.ip,
+				clientMeta.userAgent,
+				clientMeta.country,
+				clientMeta.city,
+				clientMeta.region,
+				clientMeta.timezone,
+				conversation.id,
+			);
 			if (safeName && safeName !== conversation.displayName) {
 				this.ctx.storage.sql.exec(
 					"UPDATE conversations SET display_name = ? WHERE id = ?",
@@ -370,7 +406,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 	private getOperatorState(): OperatorState {
 		const conversations = this.ctx.storage.sql
 			.exec<ConversationRow>(
-				"SELECT id, client_id, display_name, status, created_at, updated_at FROM conversations ORDER BY CASE WHEN status = 'queued' THEN 0 ELSE 1 END, CASE WHEN status = 'queued' THEN created_at END ASC, CASE WHEN status != 'queued' THEN updated_at END DESC LIMIT 100",
+				"SELECT id, client_id, display_name, status, created_at, updated_at, ip, user_agent, country, city, region, timezone FROM conversations ORDER BY CASE WHEN status = 'queued' THEN 0 ELSE 1 END, CASE WHEN status = 'queued' THEN created_at END ASC, CASE WHEN status != 'queued' THEN updated_at END DESC LIMIT 100",
 			)
 			.toArray()
 			.map((row) => this.hydrateConversation(row));
@@ -384,7 +420,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 	private findConversationByClient(clientId: string): ConversationSummary | null {
 		const row = this.ctx.storage.sql
 			.exec<ConversationRow>(
-				"SELECT id, client_id, display_name, status, created_at, updated_at FROM conversations WHERE client_id = ? LIMIT 1",
+				"SELECT id, client_id, display_name, status, created_at, updated_at, ip, user_agent, country, city, region, timezone FROM conversations WHERE client_id = ? LIMIT 1",
 				clientId,
 			)
 			.toArray()[0];
@@ -394,7 +430,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 	private findConversationById(conversationId: string): ConversationSummary | null {
 		const row = this.ctx.storage.sql
 			.exec<ConversationRow>(
-				"SELECT id, client_id, display_name, status, created_at, updated_at FROM conversations WHERE id = ? LIMIT 1",
+				"SELECT id, client_id, display_name, status, created_at, updated_at, ip, user_agent, country, city, region, timezone FROM conversations WHERE id = ? LIMIT 1",
 				conversationId,
 			)
 			.toArray()[0];
@@ -428,6 +464,14 @@ export class ChatQueue extends DurableObject<AppEnv> {
 			updatedAt: row.updated_at,
 			lastMessage,
 			messages,
+			clientMeta: {
+				ip: row.ip || "",
+				userAgent: row.user_agent || "",
+				country: row.country || "",
+				city: row.city || "",
+				region: row.region || "",
+				timezone: row.timezone || "",
+			},
 		};
 	}
 
@@ -453,6 +497,12 @@ type ConversationRow = {
 	status: string;
 	created_at: number;
 	updated_at: number;
+	ip: string;
+	user_agent: string;
+	country: string;
+	city: string;
+	region: string;
+	timezone: string;
 };
 
 type MessageRow = {
@@ -553,7 +603,16 @@ export default {
 		if (url.pathname === "/api/messages" && request.method === "POST") {
 			try {
 				const body = await request.json<{ clientId?: string; text?: string; imageId?: string; displayName?: string; fileId?: string }>();
-				const state = await getChatQueue(env).submitMessage(body.clientId ?? "", body.text ?? "", body.imageId, body.displayName, body.fileId);
+				const cf = (request as unknown as { cf?: Record<string, unknown> }).cf;
+				const clientMeta: ClientMeta = {
+					ip: request.headers.get("CF-Connecting-IP") ?? request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ?? "",
+					userAgent: request.headers.get("User-Agent") ?? "",
+					country: (cf?.country as string) ?? "",
+					city: (cf?.city as string) ?? "",
+					region: (cf?.region as string) ?? "",
+					timezone: (cf?.timezone as string) ?? "",
+				};
+				const state = await getChatQueue(env).submitMessage(body.clientId ?? "", body.text ?? "", body.imageId, body.displayName, body.fileId, clientMeta);
 				return json(state);
 			} catch (error) {
 				return errorResponse(error);

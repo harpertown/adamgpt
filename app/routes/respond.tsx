@@ -171,9 +171,9 @@ export default function Respond() {
 
 	if (!unlocked) {
 		return (
-			<main className="flex min-h-screen items-center justify-center bg-[#f3f6f4] text-[#161817]">
+			<main className="flex min-h-[100dvh] items-center justify-center bg-[#f3f6f4] px-4 py-8 text-[#161817]">
 				<form
-					className="w-full max-w-sm rounded-lg border border-[#cbd5ce] bg-white p-8 shadow-sm"
+					className="w-full max-w-sm rounded-lg border border-[#cbd5ce] bg-white p-6 shadow-sm sm:p-8"
 					onSubmit={(event) => {
 						event.preventDefault();
 						if (passwordInput === CONSOLE_PASSWORD) {
@@ -372,30 +372,53 @@ function ConversationPane({
 
 	return (
 		<section className="flex min-h-[calc(100vh-166px)] flex-col overflow-hidden rounded-lg border border-[#cbd5ce] bg-[#fbfcfb] shadow-sm">
-			<div className="flex items-center justify-between border-b border-[#dbe2dd] bg-white px-5 py-4">
-				<div>
-					<h2 className="text-base font-semibold text-[#202522]">{conversation.displayName || `Visitor ${conversation.clientId.slice(0, 8)}`}</h2>
-					<p className="text-sm text-[#68726b]">{new Date(conversation.updatedAt).toLocaleString()}</p>
+			<div className="border-b border-[#dbe2dd] bg-white px-5 py-4">
+				<div className="flex items-center justify-between">
+					<div>
+						<h2 className="text-base font-semibold text-[#202522]">{conversation.displayName || `Visitor ${conversation.clientId.slice(0, 8)}`}</h2>
+						<p className="text-sm text-[#68726b]">{new Date(conversation.updatedAt).toLocaleString()}</p>
+					</div>
+					<div className="flex items-center gap-3">
+						<span
+							className={`rounded-full px-3 py-1 text-sm font-medium ${
+								conversation.status === "queued" ? "bg-[#f7e7c6] text-[#75531a]" : "bg-[#dff0e7] text-[#236040]"
+							}`}
+						>
+							{conversation.status}
+						</span>
+						<button
+							className="grid size-9 place-items-center rounded-lg border border-[#dbe2dd] text-[#8a958d] transition hover:border-[#b94242] hover:bg-[#fef2f2] hover:text-[#b94242]"
+							onClick={onDelete}
+							title="Delete conversation"
+							type="button"
+						>
+							<svg className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} viewBox="0 0 24 24">
+								<path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14" />
+							</svg>
+						</button>
+					</div>
 				</div>
-				<div className="flex items-center gap-3">
-					<span
-						className={`rounded-full px-3 py-1 text-sm font-medium ${
-							conversation.status === "queued" ? "bg-[#f7e7c6] text-[#75531a]" : "bg-[#dff0e7] text-[#236040]"
-						}`}
-					>
-						{conversation.status}
-					</span>
-					<button
-						className="grid size-9 place-items-center rounded-lg border border-[#dbe2dd] text-[#8a958d] transition hover:border-[#b94242] hover:bg-[#fef2f2] hover:text-[#b94242]"
-						onClick={onDelete}
-						title="Delete conversation"
-						type="button"
-					>
-						<svg className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} viewBox="0 0 24 24">
-							<path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14" />
-						</svg>
-					</button>
-				</div>
+				{conversation.clientMeta && (
+					<div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-[#edf0ed] pt-3 text-xs text-[#68726b]">
+						{conversation.clientMeta.ip && (
+							<span><span className="font-medium text-[#4d5650]">IP</span> {conversation.clientMeta.ip}</span>
+						)}
+						{(conversation.clientMeta.city || conversation.clientMeta.region || conversation.clientMeta.country) && (
+							<span>
+								<span className="font-medium text-[#4d5650]">Location</span>{" "}
+								{[conversation.clientMeta.city, conversation.clientMeta.region, conversation.clientMeta.country].filter(Boolean).join(", ")}
+							</span>
+						)}
+						{conversation.clientMeta.timezone && (
+							<span><span className="font-medium text-[#4d5650]">TZ</span> {conversation.clientMeta.timezone}</span>
+						)}
+						{conversation.clientMeta.userAgent && (
+							<span className="basis-full truncate" title={conversation.clientMeta.userAgent}>
+								<span className="font-medium text-[#4d5650]">UA</span> {conversation.clientMeta.userAgent}
+							</span>
+						)}
+					</div>
+				)}
 			</div>
 
 			<div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
