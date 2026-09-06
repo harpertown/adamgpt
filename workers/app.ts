@@ -30,6 +30,7 @@ type ChatMessage = {
 type ConversationSummary = {
 	id: string;
 	clientId: string;
+	displayName: string;
 	status: ConversationStatus;
 	createdAt: number;
 	updatedAt: number;
@@ -77,6 +78,11 @@ export class ChatQueue extends DurableObject<AppEnv> {
 			`);
 			try {
 				this.ctx.storage.sql.exec("ALTER TABLE messages ADD COLUMN image_id TEXT");
+			} catch {
+				// column already exists
+			}
+			try {
+				this.ctx.storage.sql.exec("ALTER TABLE conversations ADD COLUMN display_name TEXT NOT NULL DEFAULT ''");
 			} catch {
 				// column already exists
 			}
@@ -157,12 +163,13 @@ export class ChatQueue extends DurableObject<AppEnv> {
 		return row ? { data: row.data, contentType: row.content_type } : null;
 	}
 
-	async submitMessage(clientId: string, text: string, imageId?: string): Promise<PublicState> {
+	async submitMessage(clientId: string, text: string, imageId?: string, displayName?: string): Promise<PublicState> {
 		await this.initialized;
 
 		const safeClientId = cleanId(clientId);
 		const safeText = cleanText(text);
 		const safeImageId = imageId ? cleanId(imageId) : null;
+		const safeName = cleanText(displayName).slice(0, 50);
 
 		if (!safeClientId) {
 			throw new Response("Missing clientId.", { status: 400 });
@@ -178,6 +185,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 			conversation = {
 				id: crypto.randomUUID(),
 				clientId: safeClientId,
+				displayName: safeName,
 				status: "queued",
 				createdAt: now,
 				updatedAt: now,
@@ -185,14 +193,22 @@ export class ChatQueue extends DurableObject<AppEnv> {
 				messages: [],
 			};
 			this.ctx.storage.sql.exec(
-				"INSERT INTO conversations (id, client_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+				"INSERT INTO conversations (id, client_id, display_name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
 				conversation.id,
 				conversation.clientId,
+				conversation.displayName,
 				conversation.status,
 				conversation.createdAt,
 				conversation.updatedAt,
 			);
 		} else {
+			if (safeName && safeName !== conversation.displayName) {
+				this.ctx.storage.sql.exec(
+					"UPDATE conversations SET display_name = ? WHERE id = ?",
+					safeName,
+					conversation.id,
+				);
+			}
 			this.ctx.storage.sql.exec(
 				"UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?",
 				"queued",
@@ -261,6 +277,36 @@ export class ChatQueue extends DurableObject<AppEnv> {
 		return operatorState;
 	}
 
+	async deleteConversation(conversationId: string, token: string): Promise<OperatorState> {
+		await this.initialized;
+
+		if (!isAuthorizedToken(token, this.env)) {
+			throw new Response("Unauthorized.", { status: 401 });
+		}
+
+		const safeId = cleanId(conversationId);
+		if (!safeId) {
+			throw new Response("Missing conversationId.", { status: 400 });
+		}
+
+		const conversation = this.findConversationById(safeId);
+		if (!conversation) {
+			throw new Response("Conversation not found.", { status: 404 });
+		}
+
+		this.ctx.storage.sql.exec("DELETE FROM messages WHERE conversation_id = ?", safeId);
+		this.ctx.storage.sql.exec("DELETE FROM conversations WHERE id = ?", safeId);
+
+		const deleted = JSON.stringify({ type: "conversation_deleted" });
+		for (const socket of this.ctx.getWebSockets(`client:${conversation.clientId}`)) {
+			socket.send(deleted);
+		}
+
+		const operatorState = this.getOperatorState();
+		this.broadcastToOperators(operatorState);
+		return operatorState;
+	}
+
 	async getPublicStateFor(clientId: string): Promise<PublicState> {
 		await this.initialized;
 		return this.getPublicState(cleanId(clientId));
@@ -282,7 +328,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 	private getOperatorState(): OperatorState {
 		const conversations = this.ctx.storage.sql
 			.exec<ConversationRow>(
-				"SELECT id, client_id, status, created_at, updated_at FROM conversations ORDER BY updated_at DESC LIMIT 100",
+				"SELECT id, client_id, display_name, status, created_at, updated_at FROM conversations ORDER BY CASE WHEN status = 'queued' THEN 0 ELSE 1 END, CASE WHEN status = 'queued' THEN created_at END ASC, CASE WHEN status != 'queued' THEN updated_at END DESC LIMIT 100",
 			)
 			.toArray()
 			.map((row) => this.hydrateConversation(row));
@@ -296,7 +342,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 	private findConversationByClient(clientId: string): ConversationSummary | null {
 		const row = this.ctx.storage.sql
 			.exec<ConversationRow>(
-				"SELECT id, client_id, status, created_at, updated_at FROM conversations WHERE client_id = ? LIMIT 1",
+				"SELECT id, client_id, display_name, status, created_at, updated_at FROM conversations WHERE client_id = ? LIMIT 1",
 				clientId,
 			)
 			.toArray()[0];
@@ -306,7 +352,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 	private findConversationById(conversationId: string): ConversationSummary | null {
 		const row = this.ctx.storage.sql
 			.exec<ConversationRow>(
-				"SELECT id, client_id, status, created_at, updated_at FROM conversations WHERE id = ? LIMIT 1",
+				"SELECT id, client_id, display_name, status, created_at, updated_at FROM conversations WHERE id = ? LIMIT 1",
 				conversationId,
 			)
 			.toArray()[0];
@@ -333,6 +379,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 		return {
 			id: row.id,
 			clientId: row.client_id,
+			displayName: row.display_name || "",
 			status: row.status === "answered" ? "answered" : "queued",
 			createdAt: row.created_at,
 			updatedAt: row.updated_at,
@@ -359,6 +406,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 type ConversationRow = {
 	id: string;
 	client_id: string;
+	display_name: string;
 	status: string;
 	created_at: number;
 	updated_at: number;
@@ -418,8 +466,8 @@ export default {
 
 		if (url.pathname === "/api/messages" && request.method === "POST") {
 			try {
-				const body = await request.json<{ clientId?: string; text?: string; imageId?: string }>();
-				const state = await getChatQueue(env).submitMessage(body.clientId ?? "", body.text ?? "", body.imageId);
+				const body = await request.json<{ clientId?: string; text?: string; imageId?: string; displayName?: string }>();
+				const state = await getChatQueue(env).submitMessage(body.clientId ?? "", body.text ?? "", body.imageId, body.displayName);
 				return json(state);
 			} catch (error) {
 				return errorResponse(error);
@@ -432,6 +480,19 @@ export default {
 				const state = await getChatQueue(env).submitResponse(
 					body.conversationId ?? "",
 					body.text ?? "",
+					extractToken(request),
+				);
+				return json(state);
+			} catch (error) {
+				return errorResponse(error);
+			}
+		}
+
+		if (url.pathname === "/api/conversations" && request.method === "DELETE") {
+			try {
+				const body = await request.json<{ conversationId?: string }>();
+				const state = await getChatQueue(env).deleteConversation(
+					body.conversationId ?? "",
 					extractToken(request),
 				);
 				return json(state);

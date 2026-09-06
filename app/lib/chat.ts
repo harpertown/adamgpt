@@ -13,6 +13,7 @@ export type ChatMessage = {
 export type ConversationSummary = {
 	id: string;
 	clientId: string;
+	displayName: string;
 	status: ConversationStatus;
 	createdAt: number;
 	updatedAt: number;
@@ -31,4 +32,5 @@ export type OperatorState = {
 
 export type SocketEnvelope =
 	| { type: "public_state"; state: PublicState }
-	| { type: "operator_state"; state: OperatorState };
+	| { type: "operator_state"; state: OperatorState }
+	| { type: "conversation_deleted" };

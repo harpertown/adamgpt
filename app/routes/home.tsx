@@ -17,6 +17,8 @@ export function meta({}: Route.MetaArgs) {
 
 export default function Home() {
 	const [clientId, setClientId] = useState("");
+	const [displayName, setDisplayName] = useState<string | null>(null);
+	const [nameInput, setNameInput] = useState("");
 	const [state, setState] = useState<PublicState>({ conversation: null });
 	const [text, setText] = useState("");
 	const [pendingImage, setPendingImage] = useState<File | null>(null);
@@ -33,6 +35,7 @@ export default function Home() {
 			window.localStorage.setItem("adamgpt-client-id", stored);
 		}
 		setClientId(stored);
+		setDisplayName(window.localStorage.getItem("adamgpt-display-name"));
 	}, []);
 
 	useEffect(() => {
@@ -53,6 +56,8 @@ export default function Home() {
 				const envelope = JSON.parse(event.data) as SocketEnvelope;
 				if (envelope.type === "public_state") {
 					setState(envelope.state);
+				} else if (envelope.type === "conversation_deleted") {
+					setState({ conversation: null });
 				}
 			};
 			socket.onclose = () => {
@@ -145,7 +150,7 @@ export default function Home() {
 			const response = await fetch("/api/messages", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ clientId, text: trimmed, imageId }),
+				body: JSON.stringify({ clientId, text: trimmed, imageId, displayName }),
 			});
 
 			if (!response.ok) {
@@ -163,6 +168,50 @@ export default function Home() {
 		if (!el) return;
 		el.style.height = "auto";
 		el.style.height = Math.min(el.scrollHeight, 200) + "px";
+	}
+
+	function submitName() {
+		const trimmed = nameInput.trim();
+		if (!trimmed) return;
+		window.localStorage.setItem("adamgpt-display-name", trimmed);
+		setDisplayName(trimmed);
+	}
+
+	if (displayName === null) {
+		return (
+			<main className="flex min-h-screen flex-col items-center justify-center bg-[#0a0a0a] px-4 text-[#e4e4e7]">
+				<div className="w-full max-w-[380px] text-center">
+					<h1 className="mb-2 text-[28px] font-semibold tracking-[-0.03em] text-[#fafafa]">
+						AdamGPT
+					</h1>
+					<p className="mb-8 text-[15px] text-[#71717a]">
+						What should we call you?
+					</p>
+					<form
+						onSubmit={(e) => {
+							e.preventDefault();
+							submitName();
+						}}
+					>
+						<input
+							autoFocus
+							className="mb-4 w-full rounded-xl border border-[#27272a] bg-[#18181b] px-4 py-3.5 text-[15px] text-[#fafafa] outline-none transition placeholder:text-[#52525b] focus:border-[#3f3f46]"
+							onChange={(e) => setNameInput(e.target.value)}
+							placeholder="Your name"
+							type="text"
+							value={nameInput}
+						/>
+						<button
+							className="w-full rounded-xl bg-[#fafafa] py-3.5 text-[15px] font-semibold text-[#0a0a0a] transition-opacity hover:opacity-80 disabled:opacity-30"
+							disabled={!nameInput.trim()}
+							type="submit"
+						>
+							Continue
+						</button>
+					</form>
+				</div>
+			</main>
+		);
 	}
 
 	return (

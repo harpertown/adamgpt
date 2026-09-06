@@ -94,6 +94,10 @@ export default function Respond() {
 		[activeId, state.conversations],
 	);
 
+	function authHeaders(): Record<string, string> {
+		return token ? { Authorization: `Bearer ${token}` } : {};
+	}
+
 	async function sendResponse() {
 		if (!activeConversation || !draft.trim() || isSending) {
 			return;
@@ -106,7 +110,7 @@ export default function Respond() {
 				method: "POST",
 				headers: {
 					"Content-Type": "application/json",
-					...(token ? { Authorization: `Bearer ${token}` } : {}),
+					...authHeaders(),
 				},
 				body: JSON.stringify({ conversationId: activeConversation.id, text: draft.trim() }),
 			});
@@ -124,6 +128,33 @@ export default function Respond() {
 			setState((await response.json()) as OperatorState);
 		} finally {
 			setIsSending(false);
+		}
+	}
+
+	async function deleteConversation(conversationId: string) {
+		try {
+			const response = await fetch("/api/conversations", {
+				method: "DELETE",
+				headers: {
+					"Content-Type": "application/json",
+					...authHeaders(),
+				},
+				body: JSON.stringify({ conversationId }),
+			});
+
+			if (response.status === 401) {
+				setAuthFailed(true);
+				return;
+			}
+			if (!response.ok) {
+				return;
+			}
+
+			setAuthFailed(false);
+			setDraft("");
+			setState((await response.json()) as OperatorState);
+		} catch {
+			// ignore
 		}
 	}
 
@@ -166,12 +197,14 @@ export default function Respond() {
 					<QueueList
 						activeId={activeConversation?.id ?? ""}
 						conversations={state.conversations}
+						onDelete={deleteConversation}
 						onSelect={setActiveId}
 					/>
 					<ConversationPane
 						conversation={activeConversation}
 						draft={draft}
 						isSending={isSending}
+						onDelete={() => activeConversation && deleteConversation(activeConversation.id)}
 						onDraftChange={setDraft}
 						onSend={() => void sendResponse()}
 					/>
@@ -184,10 +217,12 @@ export default function Respond() {
 function QueueList({
 	activeId,
 	conversations,
+	onDelete,
 	onSelect,
 }: {
 	activeId: string;
 	conversations: ConversationSummary[];
+	onDelete: (id: string) => void;
 	onSelect: (id: string) => void;
 }) {
 	return (
@@ -200,30 +235,47 @@ function QueueList({
 					<div className="px-4 py-12 text-center text-sm text-[#6b746e]">No conversations yet.</div>
 				) : (
 					conversations.map((conversation) => (
-						<button
-							className={`block w-full border-b border-[#edf0ed] px-4 py-4 text-left transition hover:bg-[#f5f8f6] ${
+						<div
+							className={`group relative border-b border-[#edf0ed] transition hover:bg-[#f5f8f6] ${
 								activeId === conversation.id ? "bg-[#edf4ef]" : "bg-white"
 							}`}
 							key={conversation.id}
-							onClick={() => onSelect(conversation.id)}
-							type="button"
 						>
-							<div className="mb-2 flex items-center justify-between gap-3">
-								<span className="truncate text-sm font-semibold text-[#202522]">
-									Visitor {conversation.clientId.slice(0, 8)}
-								</span>
-								<span
-									className={`rounded-full px-2 py-1 text-xs font-medium ${
-										conversation.status === "queued"
-											? "bg-[#f7e7c6] text-[#75531a]"
-											: "bg-[#dff0e7] text-[#236040]"
-									}`}
-								>
-									{conversation.status}
-								</span>
-							</div>
-							<p className="line-clamp-2 text-sm leading-6 text-[#5f6861]">{conversation.lastMessage}</p>
-						</button>
+							<button
+								className="block w-full px-4 py-4 text-left"
+								onClick={() => onSelect(conversation.id)}
+								type="button"
+							>
+								<div className="mb-2 flex items-center justify-between gap-3">
+									<span className="truncate text-sm font-semibold text-[#202522]">
+										{conversation.displayName || `Visitor ${conversation.clientId.slice(0, 8)}`}
+									</span>
+									<span
+										className={`rounded-full px-2 py-1 text-xs font-medium ${
+											conversation.status === "queued"
+												? "bg-[#f7e7c6] text-[#75531a]"
+												: "bg-[#dff0e7] text-[#236040]"
+										}`}
+									>
+										{conversation.status}
+									</span>
+								</div>
+								<p className="line-clamp-2 text-sm leading-6 text-[#5f6861]">{conversation.lastMessage}</p>
+							</button>
+							<button
+								className="absolute top-3 right-3 grid size-7 place-items-center rounded-md text-[#a3b0a7] opacity-0 transition hover:bg-[#e8ebe9] hover:text-[#b94242] group-hover:opacity-100"
+								onClick={(e) => {
+									e.stopPropagation();
+									onDelete(conversation.id);
+								}}
+								title="Delete conversation"
+								type="button"
+							>
+								<svg className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} viewBox="0 0 24 24">
+									<path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14" />
+								</svg>
+							</button>
+						</div>
 					))
 				)}
 			</div>
@@ -235,12 +287,14 @@ function ConversationPane({
 	conversation,
 	draft,
 	isSending,
+	onDelete,
 	onDraftChange,
 	onSend,
 }: {
 	conversation: ConversationSummary | null;
 	draft: string;
 	isSending: boolean;
+	onDelete: () => void;
 	onDraftChange: (draft: string) => void;
 	onSend: () => void;
 }) {
@@ -261,16 +315,28 @@ function ConversationPane({
 		<section className="flex min-h-[calc(100vh-166px)] flex-col overflow-hidden rounded-lg border border-[#cbd5ce] bg-[#fbfcfb] shadow-sm">
 			<div className="flex items-center justify-between border-b border-[#dbe2dd] bg-white px-5 py-4">
 				<div>
-					<h2 className="text-base font-semibold text-[#202522]">Visitor {conversation.clientId.slice(0, 8)}</h2>
+					<h2 className="text-base font-semibold text-[#202522]">{conversation.displayName || `Visitor ${conversation.clientId.slice(0, 8)}`}</h2>
 					<p className="text-sm text-[#68726b]">{new Date(conversation.updatedAt).toLocaleString()}</p>
 				</div>
-				<span
-					className={`rounded-full px-3 py-1 text-sm font-medium ${
-						conversation.status === "queued" ? "bg-[#f7e7c6] text-[#75531a]" : "bg-[#dff0e7] text-[#236040]"
-					}`}
-				>
-					{conversation.status}
-				</span>
+				<div className="flex items-center gap-3">
+					<span
+						className={`rounded-full px-3 py-1 text-sm font-medium ${
+							conversation.status === "queued" ? "bg-[#f7e7c6] text-[#75531a]" : "bg-[#dff0e7] text-[#236040]"
+						}`}
+					>
+						{conversation.status}
+					</span>
+					<button
+						className="grid size-9 place-items-center rounded-lg border border-[#dbe2dd] text-[#8a958d] transition hover:border-[#b94242] hover:bg-[#fef2f2] hover:text-[#b94242]"
+						onClick={onDelete}
+						title="Delete conversation"
+						type="button"
+					>
+						<svg className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} viewBox="0 0 24 24">
+							<path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14" />
+						</svg>
+					</button>
+				</div>
 			</div>
 
 			<div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
@@ -307,6 +373,12 @@ function ConversationPane({
 				<textarea
 					className="min-h-28 w-full resize-none rounded-lg border border-[#cbd5ce] bg-[#fbfcfb] px-4 py-3 text-base leading-6 outline-none transition placeholder:text-[#8a958d] focus:border-[#263d63] focus:ring-2 focus:ring-[#263d63]/15"
 					onChange={(event) => onDraftChange(event.target.value)}
+					onKeyDown={(event) => {
+						if (event.key === "Enter" && !event.shiftKey) {
+							event.preventDefault();
+							onSend();
+						}
+					}}
 					placeholder="Write the answer"
 					value={draft}
 				/>
