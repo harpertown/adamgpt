@@ -23,6 +23,7 @@ export default function Home() {
 	const [text, setText] = useState("");
 	const [pendingImage, setPendingImage] = useState<File | null>(null);
 	const [imagePreview, setImagePreview] = useState("");
+	const [pendingFile, setPendingFile] = useState<File | null>(null);
 	const [isSending, setIsSending] = useState(false);
 	const [connection, setConnection] = useState<"connecting" | "live" | "offline">("connecting");
 	const messagesRef = useRef<HTMLDivElement>(null);
@@ -119,9 +120,17 @@ export default function Home() {
 		setImagePreview("");
 	}
 
+	function attachFile(file: File) {
+		setPendingFile(file);
+	}
+
+	function removeFile() {
+		setPendingFile(null);
+	}
+
 	async function sendMessage(messageText = text) {
 		const trimmed = messageText.trim();
-		if ((!trimmed && !pendingImage) || !clientId || isSending) {
+		if ((!trimmed && !pendingImage && !pendingFile) || !clientId || isSending) {
 			return;
 		}
 
@@ -130,6 +139,7 @@ export default function Home() {
 
 		try {
 			let imageId: string | undefined;
+			let fileId: string | undefined;
 
 			if (pendingImage) {
 				const uploadResponse = await fetch("/api/upload", {
@@ -147,10 +157,29 @@ export default function Home() {
 				removeImage();
 			}
 
+			if (pendingFile) {
+				const uploadResponse = await fetch("/api/upload-file", {
+					method: "POST",
+					headers: {
+						"Content-Type": pendingFile.type,
+						"X-File-Name": pendingFile.name,
+					},
+					body: pendingFile,
+				});
+
+				if (!uploadResponse.ok) {
+					throw new Error("File upload failed");
+				}
+
+				const uploadResult = (await uploadResponse.json()) as { fileId: string };
+				fileId = uploadResult.fileId;
+				removeFile();
+			}
+
 			const response = await fetch("/api/messages", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ clientId, text: trimmed, imageId, displayName }),
+				body: JSON.stringify({ clientId, text: trimmed, imageId, fileId, displayName }),
 			});
 
 			if (!response.ok) {
@@ -246,9 +275,12 @@ export default function Home() {
 								imagePreview={imagePreview}
 								isSending={isSending}
 								onAttach={attachImage}
+								onAttachFile={attachFile}
+								onRemoveFile={removeFile}
 								onRemoveImage={removeImage}
 								onSend={() => void sendMessage()}
 								onTextChange={setText}
+								pendingFile={pendingFile}
 								text={text}
 								textareaRef={textareaRef}
 							/>
@@ -291,6 +323,19 @@ export default function Home() {
 												loading="lazy"
 												src={`/api/images/${message.imageId}`}
 											/>
+										)}
+										{message.fileId && (
+											<a
+												className="mb-2 flex items-center gap-2 rounded-lg border border-[#27272a] bg-[#18181b] px-3 py-2 text-sm text-[#a1a1aa] transition-colors hover:border-[#3f3f46] hover:text-[#d4d4d8]"
+												download
+												href={`/api/files/${message.fileId}`}
+											>
+												<svg className="size-4 shrink-0" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} viewBox="0 0 24 24">
+													<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+													<polyline points="14 2 14 8 20 8" />
+												</svg>
+												Download file
+											</a>
 										)}
 										{message.text && (
 											<div
@@ -343,14 +388,19 @@ export default function Home() {
 	);
 }
 
+const FILE_ACCEPT = ".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 function InputArea({
 	autoResize,
 	imagePreview,
 	isSending,
 	onAttach,
+	onAttachFile,
+	onRemoveFile,
 	onRemoveImage,
 	onSend,
 	onTextChange,
+	pendingFile,
 	text,
 	textareaRef,
 }: {
@@ -358,18 +408,30 @@ function InputArea({
 	imagePreview: string;
 	isSending: boolean;
 	onAttach: (file: File) => void;
+	onAttachFile: (file: File) => void;
+	onRemoveFile: () => void;
 	onRemoveImage: () => void;
 	onSend: () => void;
 	onTextChange: (value: string) => void;
+	pendingFile: File | null;
 	text: string;
 	textareaRef: React.RefObject<HTMLTextAreaElement | null>;
 }) {
 	const fileInputRef = useRef<HTMLInputElement>(null);
+	const docInputRef = useRef<HTMLInputElement>(null);
 
 	function handleFileSelect(event: React.ChangeEvent<HTMLInputElement>) {
 		const file = event.target.files?.[0];
 		if (file && file.type.startsWith("image/")) {
 			onAttach(file);
+		}
+		event.target.value = "";
+	}
+
+	function handleDocSelect(event: React.ChangeEvent<HTMLInputElement>) {
+		const file = event.target.files?.[0];
+		if (file) {
+			onAttachFile(file);
 		}
 		event.target.value = "";
 	}
@@ -382,24 +444,44 @@ function InputArea({
 			}}
 		>
 			<div className="relative rounded-xl border border-[#27272a] bg-[#18181b] transition-colors focus-within:border-[#3f3f46]">
-				{imagePreview && (
-					<div className="px-4 pt-3">
-						<div className="group relative inline-block">
-							<img
-								alt="Upload preview"
-								className="h-20 rounded-lg object-cover"
-								src={imagePreview}
-							/>
-							<button
-								className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full bg-[#3f3f46] text-[#fafafa] opacity-0 transition-opacity group-hover:opacity-100"
-								onClick={onRemoveImage}
-								type="button"
-							>
-								<svg className="size-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-									<path d="M18 6 6 18M6 6l12 12" />
+				{(imagePreview || pendingFile) && (
+					<div className="flex flex-wrap items-center gap-2 px-4 pt-3">
+						{imagePreview && (
+							<div className="group relative inline-block">
+								<img
+									alt="Upload preview"
+									className="h-20 rounded-lg object-cover"
+									src={imagePreview}
+								/>
+								<button
+									className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full bg-[#3f3f46] text-[#fafafa] opacity-0 transition-opacity group-hover:opacity-100"
+									onClick={onRemoveImage}
+									type="button"
+								>
+									<svg className="size-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+										<path d="M18 6 6 18M6 6l12 12" />
+									</svg>
+								</button>
+							</div>
+						)}
+						{pendingFile && (
+							<div className="group relative flex items-center gap-2 rounded-lg border border-[#27272a] bg-[#18181b] px-3 py-2">
+								<svg className="size-4 shrink-0 text-[#71717a]" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} viewBox="0 0 24 24">
+									<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+									<polyline points="14 2 14 8 20 8" />
 								</svg>
-							</button>
-						</div>
+								<span className="max-w-[160px] truncate text-sm text-[#a1a1aa]">{pendingFile.name}</span>
+								<button
+									className="grid size-5 place-items-center rounded-full text-[#52525b] transition-colors hover:text-[#fafafa]"
+									onClick={onRemoveFile}
+									type="button"
+								>
+									<svg className="size-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+										<path d="M18 6 6 18M6 6l12 12" />
+									</svg>
+								</button>
+							</div>
+						)}
 					</div>
 				)}
 				<textarea
@@ -426,7 +508,26 @@ function InputArea({
 					onChange={handleFileSelect}
 					type="file"
 				/>
+				<input
+					ref={docInputRef}
+					accept={FILE_ACCEPT}
+					className="hidden"
+					onChange={handleDocSelect}
+					type="file"
+				/>
 				<div className="absolute right-2 bottom-2 flex items-center gap-1.5">
+					<button
+						className="grid size-8 place-items-center rounded-lg text-[#52525b] transition-colors hover:text-[#a1a1aa]"
+						onClick={() => docInputRef.current?.click()}
+						title="Attach file"
+						type="button"
+					>
+						<svg className="size-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} viewBox="0 0 24 24">
+							<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+							<polyline points="14 2 14 8 20 8" />
+						</svg>
+						<span className="sr-only">Attach file</span>
+					</button>
 					<button
 						className="grid size-8 place-items-center rounded-lg text-[#52525b] transition-colors hover:text-[#a1a1aa]"
 						onClick={() => fileInputRef.current?.click()}
@@ -440,7 +541,7 @@ function InputArea({
 					</button>
 					<button
 						className="grid size-8 place-items-center rounded-lg bg-[#fafafa] text-[#0a0a0a] transition-opacity hover:opacity-80 disabled:opacity-30"
-						disabled={(!text.trim() && !imagePreview) || isSending}
+						disabled={(!text.trim() && !imagePreview && !pendingFile) || isSending}
 						title="Send message"
 						type="submit"
 					>

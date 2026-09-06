@@ -9,7 +9,18 @@ export function meta({}: Route.MetaArgs) {
 	];
 }
 
+const CONSOLE_PASSWORD = "qwerty2712";
+
 export default function Respond() {
+	const [unlocked, setUnlocked] = useState(() => {
+		if (typeof window !== "undefined") {
+			return window.sessionStorage.getItem("adamgpt-unlocked") === "1";
+		}
+		return false;
+	});
+	const [passwordInput, setPasswordInput] = useState("");
+	const [passwordError, setPasswordError] = useState(false);
+
 	const [state, setState] = useState<OperatorState>({ conversations: [], queuedCount: 0 });
 	const [activeId, setActiveId] = useState("");
 	const [draft, setDraft] = useState("");
@@ -156,6 +167,54 @@ export default function Respond() {
 		} catch {
 			// ignore
 		}
+	}
+
+	if (!unlocked) {
+		return (
+			<main className="flex min-h-screen items-center justify-center bg-[#f3f6f4] text-[#161817]">
+				<form
+					className="w-full max-w-sm rounded-lg border border-[#cbd5ce] bg-white p-8 shadow-sm"
+					onSubmit={(event) => {
+						event.preventDefault();
+						if (passwordInput === CONSOLE_PASSWORD) {
+							window.sessionStorage.setItem("adamgpt-unlocked", "1");
+							setUnlocked(true);
+							setPasswordError(false);
+						} else {
+							setPasswordError(true);
+						}
+					}}
+				>
+					<div className="mb-6 flex justify-center">
+						<span className="grid size-12 place-items-center rounded-full bg-[#171717] text-sm font-semibold text-white">
+							AG
+						</span>
+					</div>
+					<h1 className="mb-1 text-center text-lg font-semibold">Response Console</h1>
+					<p className="mb-6 text-center text-sm text-[#5f6861]">Enter password to continue</p>
+					<input
+						autoFocus
+						className={`w-full rounded-lg border px-4 py-3 text-sm outline-none transition placeholder:text-[#8a958d] focus:ring-2 focus:ring-[#263d63]/15 ${
+							passwordError ? "border-[#b94242] focus:border-[#b94242]" : "border-[#cbd5ce] focus:border-[#263d63]"
+						}`}
+						onChange={(event) => {
+							setPasswordInput(event.target.value);
+							setPasswordError(false);
+						}}
+						placeholder="Password"
+						type="password"
+						value={passwordInput}
+					/>
+					{passwordError && <p className="mt-2 text-sm text-[#b94242]">Incorrect password</p>}
+					<button
+						className="mt-4 w-full rounded-lg bg-[#171717] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#2d2c29]"
+						type="submit"
+					>
+						Unlock
+					</button>
+				</form>
+			</main>
+		);
 	}
 
 	return (
@@ -356,6 +415,19 @@ function ConversationPane({
 									loading="lazy"
 									src={`/api/images/${message.imageId}`}
 								/>
+							)}
+							{message.fileId && (
+								<a
+									className="mb-2 flex items-center gap-2 rounded border border-[#cbd5ce] bg-[#f3f6f4] px-3 py-2 text-sm text-[#4d5650] transition hover:bg-[#e8ebe9]"
+									download
+									href={`/api/files/${message.fileId}`}
+								>
+									<svg className="size-4 shrink-0" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} viewBox="0 0 24 24">
+										<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+										<polyline points="14 2 14 8 20 8" />
+									</svg>
+									Download file
+								</a>
 							)}
 							{message.text}
 						</div>

@@ -24,6 +24,7 @@ type ChatMessage = {
 	sender: Sender;
 	text: string;
 	imageId?: string;
+	fileId?: string;
 	createdAt: number;
 };
 
@@ -94,6 +95,20 @@ export class ChatQueue extends DurableObject<AppEnv> {
 					created_at INTEGER NOT NULL
 				)
 			`);
+			this.ctx.storage.sql.exec(`
+				CREATE TABLE IF NOT EXISTS files (
+					id TEXT PRIMARY KEY,
+					file_name TEXT NOT NULL,
+					content_type TEXT NOT NULL,
+					data BLOB NOT NULL,
+					created_at INTEGER NOT NULL
+				)
+			`);
+			try {
+				this.ctx.storage.sql.exec("ALTER TABLE messages ADD COLUMN file_id TEXT");
+			} catch {
+				// column already exists
+			}
 			this.ctx.storage.sql.exec(
 				"CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages (conversation_id, created_at)",
 			);
@@ -152,6 +167,31 @@ export class ChatQueue extends DurableObject<AppEnv> {
 		return id;
 	}
 
+	async storeFile(data: ArrayBuffer, contentType: string, fileName: string): Promise<string> {
+		await this.initialized;
+		const id = crypto.randomUUID();
+		this.ctx.storage.sql.exec(
+			"INSERT INTO files (id, file_name, content_type, data, created_at) VALUES (?, ?, ?, ?, ?)",
+			id,
+			fileName,
+			contentType,
+			data,
+			Date.now(),
+		);
+		return id;
+	}
+
+	async getFile(id: string): Promise<{ data: ArrayBuffer; contentType: string; fileName: string } | null> {
+		await this.initialized;
+		const row = this.ctx.storage.sql
+			.exec<{ data: ArrayBuffer; content_type: string; file_name: string }>(
+				"SELECT data, content_type, file_name FROM files WHERE id = ? LIMIT 1",
+				cleanId(id),
+			)
+			.toArray()[0];
+		return row ? { data: row.data, contentType: row.content_type, fileName: row.file_name } : null;
+	}
+
 	async getImage(id: string): Promise<{ data: ArrayBuffer; contentType: string } | null> {
 		await this.initialized;
 		const row = this.ctx.storage.sql
@@ -163,18 +203,19 @@ export class ChatQueue extends DurableObject<AppEnv> {
 		return row ? { data: row.data, contentType: row.content_type } : null;
 	}
 
-	async submitMessage(clientId: string, text: string, imageId?: string, displayName?: string): Promise<PublicState> {
+	async submitMessage(clientId: string, text: string, imageId?: string, displayName?: string, fileId?: string): Promise<PublicState> {
 		await this.initialized;
 
 		const safeClientId = cleanId(clientId);
 		const safeText = cleanText(text);
 		const safeImageId = imageId ? cleanId(imageId) : null;
+		const safeFileId = fileId ? cleanId(fileId) : null;
 		const safeName = cleanText(displayName).slice(0, 50);
 
 		if (!safeClientId) {
 			throw new Response("Missing clientId.", { status: 400 });
 		}
-		if (!safeText && !safeImageId) {
+		if (!safeText && !safeImageId && !safeFileId) {
 			throw new Response("Message cannot be empty.", { status: 400 });
 		}
 
@@ -218,12 +259,13 @@ export class ChatQueue extends DurableObject<AppEnv> {
 		}
 
 		this.ctx.storage.sql.exec(
-			"INSERT INTO messages (id, conversation_id, sender, text, image_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+			"INSERT INTO messages (id, conversation_id, sender, text, image_id, file_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
 			crypto.randomUUID(),
 			conversation.id,
 			"user",
 			safeText,
 			safeImageId,
+			safeFileId,
 			now,
 		);
 
@@ -362,7 +404,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 	private hydrateConversation(row: ConversationRow): ConversationSummary {
 		const messages = this.ctx.storage.sql
 			.exec<MessageRow>(
-				"SELECT id, conversation_id, sender, text, image_id, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 200",
+				"SELECT id, conversation_id, sender, text, image_id, file_id, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 200",
 				row.id,
 			)
 			.toArray()
@@ -372,6 +414,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 				sender: (message.sender === "assistant" ? "assistant" : "user") as Sender,
 				text: message.text,
 				...(message.image_id ? { imageId: message.image_id } : {}),
+				...(message.file_id ? { fileId: message.file_id } : {}),
 				createdAt: message.created_at,
 			}));
 		const lastMessage = messages.at(-1)?.text ?? "";
@@ -418,6 +461,7 @@ type MessageRow = {
 	sender: string;
 	text: string;
 	image_id: string | null;
+	file_id: string | null;
 	created_at: number;
 };
 
@@ -464,10 +508,52 @@ export default {
 			}
 		}
 
+		if (url.pathname === "/api/upload-file" && request.method === "POST") {
+			try {
+				const contentType = request.headers.get("Content-Type") ?? "";
+				const fileName = request.headers.get("X-File-Name") ?? "file";
+				const allowedTypes = [
+					"text/plain",
+					"application/pdf",
+					"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+				];
+				if (!allowedTypes.includes(contentType)) {
+					return json({ error: "Only txt, pdf, and docx files are allowed." }, 400);
+				}
+				const data = await request.arrayBuffer();
+				if (data.byteLength > 10 * 1024 * 1024) {
+					return json({ error: "File must be under 10MB." }, 400);
+				}
+				const fileId = await getChatQueue(env).storeFile(data, contentType, fileName);
+				return json({ fileId });
+			} catch (error) {
+				return errorResponse(error);
+			}
+		}
+
+		if (url.pathname.startsWith("/api/files/") && request.method === "GET") {
+			try {
+				const fileId = url.pathname.slice("/api/files/".length);
+				const file = await getChatQueue(env).getFile(fileId);
+				if (!file) {
+					return json({ error: "File not found." }, 404);
+				}
+				return new Response(file.data, {
+					headers: {
+						"Content-Type": file.contentType,
+						"Content-Disposition": `attachment; filename="${file.fileName}"`,
+						"Cache-Control": "public, max-age=31536000, immutable",
+					},
+				});
+			} catch (error) {
+				return errorResponse(error);
+			}
+		}
+
 		if (url.pathname === "/api/messages" && request.method === "POST") {
 			try {
-				const body = await request.json<{ clientId?: string; text?: string; imageId?: string; displayName?: string }>();
-				const state = await getChatQueue(env).submitMessage(body.clientId ?? "", body.text ?? "", body.imageId, body.displayName);
+				const body = await request.json<{ clientId?: string; text?: string; imageId?: string; displayName?: string; fileId?: string }>();
+				const state = await getChatQueue(env).submitMessage(body.clientId ?? "", body.text ?? "", body.imageId, body.displayName, body.fileId);
 				return json(state);
 			} catch (error) {
 				return errorResponse(error);

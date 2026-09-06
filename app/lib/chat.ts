@@ -7,6 +7,7 @@ export type ChatMessage = {
 	sender: Sender;
 	text: string;
 	imageId?: string;
+	fileId?: string;
 	createdAt: number;
 };
 
