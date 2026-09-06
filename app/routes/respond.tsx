@@ -283,6 +283,14 @@ function ConversationPane({
 									: "bg-[#263d63] text-white"
 							}`}
 						>
+							{message.imageId && (
+								<img
+									alt="Attached image"
+									className="mb-2 max-h-48 rounded"
+									loading="lazy"
+									src={`/api/images/${message.imageId}`}
+								/>
+							)}
 							{message.text}
 						</div>
 					</article>

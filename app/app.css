@@ -8,7 +8,37 @@
 
 html,
 body {
-	@apply bg-white;
+	@apply bg-[#0a0a0a];
+}
+
+.thinking-dot {
+	width: 4px;
+	height: 4px;
+	border-radius: 50%;
+	background: #52525b;
+	animation: thinking-pulse 1.4s ease-in-out infinite;
+}
+
+.thinking-dot:nth-child(2) {
+	animation-delay: 0.2s;
+}
+
+.thinking-dot:nth-child(3) {
+	animation-delay: 0.4s;
+}
+
+@keyframes thinking-pulse {
+	0%,
+	80%,
+	100% {
+		opacity: 0.3;
+		transform: scale(1);
+	}
+
+	40% {
+		opacity: 1;
+		transform: scale(1.2);
+	}
 }
 
 .loading-dots::after {

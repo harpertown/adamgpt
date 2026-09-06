@@ -6,6 +6,7 @@ export type ChatMessage = {
 	conversationId: string;
 	sender: Sender;
 	text: string;
+	imageId?: string;
 	createdAt: number;
 };
 

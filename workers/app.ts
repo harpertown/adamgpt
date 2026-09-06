@@ -23,6 +23,7 @@ type ChatMessage = {
 	conversationId: string;
 	sender: Sender;
 	text: string;
+	imageId?: string;
 	createdAt: number;
 };
 
@@ -74,6 +75,19 @@ export class ChatQueue extends DurableObject<AppEnv> {
 					created_at INTEGER NOT NULL
 				)
 			`);
+			try {
+				this.ctx.storage.sql.exec("ALTER TABLE messages ADD COLUMN image_id TEXT");
+			} catch {
+				// column already exists
+			}
+			this.ctx.storage.sql.exec(`
+				CREATE TABLE IF NOT EXISTS images (
+					id TEXT PRIMARY KEY,
+					content_type TEXT NOT NULL,
+					data BLOB NOT NULL,
+					created_at INTEGER NOT NULL
+				)
+			`);
 			this.ctx.storage.sql.exec(
 				"CREATE INDEX IF NOT EXISTS idx_messages_conversation_created ON messages (conversation_id, created_at)",
 			);
@@ -119,16 +133,41 @@ export class ChatQueue extends DurableObject<AppEnv> {
 		return new Response(null, { status: 101, webSocket: client });
 	}
 
-	async submitMessage(clientId: string, text: string): Promise<PublicState> {
+	async storeImage(data: ArrayBuffer, contentType: string): Promise<string> {
+		await this.initialized;
+		const id = crypto.randomUUID();
+		this.ctx.storage.sql.exec(
+			"INSERT INTO images (id, content_type, data, created_at) VALUES (?, ?, ?, ?)",
+			id,
+			contentType,
+			data,
+			Date.now(),
+		);
+		return id;
+	}
+
+	async getImage(id: string): Promise<{ data: ArrayBuffer; contentType: string } | null> {
+		await this.initialized;
+		const row = this.ctx.storage.sql
+			.exec<{ data: ArrayBuffer; content_type: string }>(
+				"SELECT data, content_type FROM images WHERE id = ? LIMIT 1",
+				cleanId(id),
+			)
+			.toArray()[0];
+		return row ? { data: row.data, contentType: row.content_type } : null;
+	}
+
+	async submitMessage(clientId: string, text: string, imageId?: string): Promise<PublicState> {
 		await this.initialized;
 
 		const safeClientId = cleanId(clientId);
 		const safeText = cleanText(text);
+		const safeImageId = imageId ? cleanId(imageId) : null;
 
 		if (!safeClientId) {
 			throw new Response("Missing clientId.", { status: 400 });
 		}
-		if (!safeText) {
+		if (!safeText && !safeImageId) {
 			throw new Response("Message cannot be empty.", { status: 400 });
 		}
 
@@ -163,11 +202,12 @@ export class ChatQueue extends DurableObject<AppEnv> {
 		}
 
 		this.ctx.storage.sql.exec(
-			"INSERT INTO messages (id, conversation_id, sender, text, created_at) VALUES (?, ?, ?, ?, ?)",
+			"INSERT INTO messages (id, conversation_id, sender, text, image_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
 			crypto.randomUUID(),
 			conversation.id,
 			"user",
 			safeText,
+			safeImageId,
 			now,
 		);
 
@@ -276,7 +316,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 	private hydrateConversation(row: ConversationRow): ConversationSummary {
 		const messages = this.ctx.storage.sql
 			.exec<MessageRow>(
-				"SELECT id, conversation_id, sender, text, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 200",
+				"SELECT id, conversation_id, sender, text, image_id, created_at FROM messages WHERE conversation_id = ? ORDER BY created_at ASC LIMIT 200",
 				row.id,
 			)
 			.toArray()
@@ -285,6 +325,7 @@ export class ChatQueue extends DurableObject<AppEnv> {
 				conversationId: message.conversation_id,
 				sender: (message.sender === "assistant" ? "assistant" : "user") as Sender,
 				text: message.text,
+				...(message.image_id ? { imageId: message.image_id } : {}),
 				createdAt: message.created_at,
 			}));
 		const lastMessage = messages.at(-1)?.text ?? "";
@@ -328,6 +369,7 @@ type MessageRow = {
 	conversation_id: string;
 	sender: string;
 	text: string;
+	image_id: string | null;
 	created_at: number;
 };
 
@@ -339,10 +381,45 @@ export default {
 			return getChatQueue(env).fetch(request);
 		}
 
+		if (url.pathname === "/api/upload" && request.method === "POST") {
+			try {
+				const contentType = request.headers.get("Content-Type") ?? "";
+				if (!contentType.startsWith("image/")) {
+					return json({ error: "Only image uploads are allowed." }, 400);
+				}
+				const data = await request.arrayBuffer();
+				if (data.byteLength > 5 * 1024 * 1024) {
+					return json({ error: "Image must be under 5MB." }, 400);
+				}
+				const imageId = await getChatQueue(env).storeImage(data, contentType);
+				return json({ imageId });
+			} catch (error) {
+				return errorResponse(error);
+			}
+		}
+
+		if (url.pathname.startsWith("/api/images/") && request.method === "GET") {
+			try {
+				const imageId = url.pathname.slice("/api/images/".length);
+				const image = await getChatQueue(env).getImage(imageId);
+				if (!image) {
+					return json({ error: "Image not found." }, 404);
+				}
+				return new Response(image.data, {
+					headers: {
+						"Content-Type": image.contentType,
+						"Cache-Control": "public, max-age=31536000, immutable",
+					},
+				});
+			} catch (error) {
+				return errorResponse(error);
+			}
+		}
+
 		if (url.pathname === "/api/messages" && request.method === "POST") {
 			try {
-				const body = await request.json<{ clientId?: string; text?: string }>();
-				const state = await getChatQueue(env).submitMessage(body.clientId ?? "", body.text ?? "");
+				const body = await request.json<{ clientId?: string; text?: string; imageId?: string }>();
+				const state = await getChatQueue(env).submitMessage(body.clientId ?? "", body.text ?? "", body.imageId);
 				return json(state);
 			} catch (error) {
 				return errorResponse(error);
