@@ -11,7 +11,9 @@ const starterPrompts = [
 export function meta({}: Route.MetaArgs) {
 	return [
 		{ title: "AdamGPT" },
-		{ name: "description", content: "A live human answer interface." },
+		{ name: "description", content: "AdamGPT" },
+		{ property: "og:title", content: "AdamGPT" },
+		{ property: "og:description", content: "AdamGPT" },
 	];
 }
 
